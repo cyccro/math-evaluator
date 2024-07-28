@@ -47,9 +47,9 @@ pub fn tokenize(content: &str) -> Vec<MathToken> {
                 if byte.is_ascii_digit() {
                     let mut digit = String::with_capacity(12);
                     while let Some(byte) = bytes.get(i) {
-                        let mut pc = 0;
-                        if byte.is_ascii_digit() || (*byte == b'.' && pc == 0) {
-                            pc += if *byte == b'.' { 1 } else { 0 };
+                        let mut _has = false;
+                        if byte.is_ascii_digit() || (*byte == b'.' && !_has) {
+                            _has = *byte == b'.';
                             digit.push(*byte as char);
                             i += 1;
                         } else {
@@ -123,10 +123,9 @@ impl Parser {
     pub fn expect(&mut self, tk: MathToken) -> Result<MathToken, Error> {
         if let Some(token) = self.eat() {
             if token == tk {
-                Ok(token)
-            } else {
-                Err(Error(format!("Expected {tk:?} instead got {token:?}")))
+                return Ok(token);
             }
+            Err(Error(format!("Expected {tk:?} instead got {token:?}")))
         } else {
             Err(Error("Token is None, expected find some".to_string()))
         }
@@ -135,10 +134,9 @@ impl Parser {
         if let Some(MathToken::Eq) = self.next() {
             if let Some(MathToken::Alpha(varname)) = self.peak() {
                 self.eat_n(2);
-                Ok(Expr::Def(varname, Box::new(self.parse_expr())))
-            } else {
-                Err(Error("Expected identifier for var definition".to_string()))
+                return Ok(Expr::Def(varname, Box::new(self.parse_expr()?)));
             }
+            return Err(Error("Expected identifier for var definition".to_string()));
         } else {
             self.parse_func()
         }
@@ -148,121 +146,131 @@ impl Parser {
             self.eat(); //eat l paren
             if let Some(MathToken::Alpha(pname)) = self.eat() {
                 self.eat(); //eat r paren
-                return self
-                    .expect(MathToken::Eq)
-                    .map(|_| Expr::Func(fname, pname, Box::new(self.parse_expr())));
+                if let Ok(_) = self.expect(MathToken::Eq) {
+                    let expr = self.parse_expr()?;
+                    return Ok(Expr::Func(fname, pname, Box::new(expr)));
+                }
             }
             return Err(Error("Expected token to be alphanumeric".to_string()));
         }
         return Err(Error("No tokens to parse".to_string()));
     }
-    fn parse_expr(&mut self) -> Expr {
+    fn parse_expr(&mut self) -> Result<Expr, Error> {
         self.parse_additive()
     }
-    fn parse_pow(&mut self) -> Expr {
-        let mut left = self.parse_primary();
+    fn parse_pow(&mut self) -> Result<Expr, Error> {
+        let mut left = match self.parse_primary() {
+            Ok(expr) => expr,
+            Err(e) => return Err(e),
+        };
         while let Some(MathToken::Operator(MathOp::POW)) = self.peak() {
             self.eat();
-            let right = self.parse_primary();
             left = Expr::BinExpr {
                 lhs: Box::new(left),
-                rhs: Box::new(right),
+                rhs: Box::new(match self.parse_primary() {
+                    Ok(expr) => expr,
+                    Err(e) => return Err(e),
+                }),
                 operator: MathOp::POW,
             }
         }
-        left
+        Ok(left)
     }
-    fn parse_multiplicative(&mut self) -> Expr {
-        let mut left = self.parse_pow();
-        while let Some(MathToken::Operator(t)) = self.peak() {
-            let op = match t {
-                MathOp::MUL | MathOp::DIV | MathOp::REM => t,
-                _ => break,
-            };
+    fn parse_multiplicative(&mut self) -> Result<Expr, Error> {
+        let mut left = match self.parse_pow() {
+            Err(e) => return Err(e),
+            Ok(expr) => expr,
+        };
+        while let Some(MathToken::Operator(op @ (MathOp::MUL | MathOp::DIV | MathOp::REM))) =
+            self.peak()
+        {
             self.eat();
-            let right = self.parse_pow();
             left = Expr::BinExpr {
                 lhs: Box::new(left),
-                rhs: Box::new(right),
+                rhs: Box::new(match self.parse_pow() {
+                    Err(e) => return Err(e),
+                    Ok(expr) => expr,
+                }),
                 operator: op,
             };
         }
-        left
+        Ok(left)
     }
-    fn parse_additive(&mut self) -> Expr {
-        let mut left = self.parse_multiplicative();
-        while let Some(MathToken::Operator(t)) = self.peak() {
-            let op = match t {
-                MathOp::ADD | MathOp::SUB => t,
-                _ => break,
-            };
+    fn parse_additive(&mut self) -> Result<Expr, Error> {
+        let mut left = match self.parse_multiplicative() {
+            Ok(expr) => expr,
+            Err(e) => return Err(e),
+        };
+        while let Some(MathToken::Operator(op @ (MathOp::ADD | MathOp::SUB))) = self.peak() {
             self.eat();
-            let right = self.parse_multiplicative();
             left = Expr::BinExpr {
                 lhs: Box::new(left),
-                rhs: Box::new(right),
+                rhs: Box::new(match self.parse_multiplicative() {
+                    Ok(expr) => expr,
+                    Err(e) => return Err(e),
+                }),
                 operator: op,
             };
         }
-        left
+        Ok(left)
     }
-    fn parse_primary(&mut self) -> Expr {
+    fn parse_primary(&mut self) -> Result<Expr, Error> {
         if let Some(token) = self.peak() {
-            match token {
+            return match token {
                 MathToken::LeftParen => {
-                    //left paren for expr
+                    //left paren for expr (5 * x - 4y)
                     self.eat();
-                    let expr = self.parse_additive();
-                    self.expect(MathToken::RightParen).unwrap();
-                    expr
+                    let expr = self.parse_expr()?;
+                    self.expect(MathToken::RightParen)?;
+                    Ok(expr)
                 }
                 MathToken::Alpha(name) => {
-                    if let Some(tk) = self.next() {
-                        match tk {
-                            MathToken::Num(next) => {
-                                self.eat_n(2);
-                                Expr::BinExpr {
-                                    lhs: Box::new(Expr::Identifier(name)),
-                                    rhs: Box::new(Expr::Numeric(next.parse::<f64>().unwrap())),
-                                    operator: MathOp::MUL,
-                                }
-                            }
-                            MathToken::LeftParen => {
-                                self.eat_n(2);
-                                Expr::FunCall(name, Box::new(self.parse_expr()))
-                            }
-                            _ => {
-                                self.eat();
-                                Expr::Identifier(name)
-                            }
-                        }
+                    let next = if let Some(next) = self.next() {
+                        next
                     } else {
                         self.eat();
-                        Expr::Identifier(name)
-                    }
+                        return Ok(Expr::Identifier(name));
+                    };
+                    let expr = match next {
+                        MathToken::LeftParen => {
+                            self.eat_n(2);
+                            Expr::FunCall(name, Box::new(self.parse_expr()?))
+                        }
+                        MathToken::Num(next) => {
+                            self.eat_n(2);
+                            Expr::BinExpr {
+                                lhs: Box::new(Expr::Identifier(name)),
+                                rhs: Box::new(Expr::Numeric(next.parse::<f64>().unwrap())),
+                                operator: MathOp::MUL,
+                            }
+                        }
+                        _ => {
+                            self.eat();
+                            return Ok(Expr::Identifier(name));
+                        }
+                    };
+                    Ok(expr)
                 }
                 MathToken::Num(num) => {
                     if let Some(MathToken::Alpha(next)) = self.next() {
                         self.eat_n(2);
-                        Expr::BinExpr {
+                        Ok(Expr::BinExpr {
                             lhs: Box::new(Expr::Numeric(num.parse::<f64>().unwrap())),
                             rhs: Box::new(Expr::Identifier(next)),
                             operator: MathOp::MUL,
-                        }
+                        })
                     } else {
                         if let Ok(val) = num.parse::<f64>() {
                             self.eat();
-                            Expr::Numeric(val)
-                        } else {
-                            panic!("Invalid number {num}");
+                            return Ok(Expr::Numeric(val));
                         }
+                        return Err(Error(format!("Invalid number {num}")));
                     }
                 }
-                _ => panic!("Unexpected token {:?}", token),
-            }
-        } else {
-            panic!("Could not peak");
+                _ => Err(Error(format!("Unexpected token {token:?} during parse"))),
+            };
         }
+        return Err(Error("Not able to parse due to lack of tokens".to_string()));
     }
 }
 
