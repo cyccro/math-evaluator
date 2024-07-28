@@ -15,6 +15,7 @@ pub enum MathToken {
     LeftParen,
     RightParen,
     Eq,
+    VarDecl,
     Alpha(String),
     Num(String),
     Operator(MathOp),
@@ -69,7 +70,11 @@ pub fn tokenize(content: &str) -> Vec<MathToken> {
                         };
                     }
                     i -= 1;
-                    MathToken::Alpha(str)
+                    if str == "declare" {
+                        MathToken::VarDecl
+                    } else {
+                        MathToken::Alpha(str)
+                    }
                 } else {
                     i += 1;
                     continue;
@@ -97,6 +102,7 @@ pub enum Expr {
     Func(String, String, Box<Expr>), //Func name, Func param, func expr,
     FunCall(String, Box<Expr>),      //Func name, parameter
     Def(String, Box<Expr>),
+    //VarDeclaration(String, Box<Expr>),
     Identifier(String),
     Numeric(f64),
 }
@@ -217,6 +223,15 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expr, Error> {
         if let Some(token) = self.peak() {
             return match token {
+                /*          MathToken::VarDecl => {
+                    self.eat();
+                    if let Some(MathToken::Alpha(varname)) = self.eat() {
+                        self.expect(MathToken::Eq)?;
+                        Ok(Expr::VarDeclaration(varname, Box::new(self.parse_expr()?)))
+                    }else {
+                        Err(Error(format!("Expected a identifier for variable name")))
+                    }
+                }*/
                 MathToken::LeftParen => {
                     //left paren for expr (5 * x - 4y)
                     self.eat();
@@ -240,7 +255,10 @@ impl Parser {
                             self.eat_n(2);
                             Expr::BinExpr {
                                 lhs: Box::new(Expr::Identifier(name)),
-                                rhs: Box::new(Expr::Numeric(next.parse::<f64>().unwrap())),
+                                rhs: Box::new(Expr::Numeric(match next.parse::<f64>() {
+                                    Ok(num) => num,
+                                    Err(e) => return Err(Error(format!("{e:?}"))),
+                                })),
                                 operator: MathOp::MUL,
                             }
                         }
@@ -255,7 +273,10 @@ impl Parser {
                     if let Some(MathToken::Alpha(next)) = self.next() {
                         self.eat_n(2);
                         Ok(Expr::BinExpr {
-                            lhs: Box::new(Expr::Numeric(num.parse::<f64>().unwrap())),
+                            lhs: Box::new(Expr::Numeric(match next.parse::<f64>() {
+                                Ok(num) => num,
+                                Err(e) => return Err(Error(format!("{e:?}"))),
+                            })),
                             rhs: Box::new(Expr::Identifier(next)),
                             operator: MathOp::MUL,
                         })
@@ -298,7 +319,7 @@ impl Evaluator {
             Expr::Func(fname, _, expr) => {
                 self.save_func(fname, expr);
             }
-            _ => panic!("err"),
+            _ => {}
         }
     }
     pub fn save_fns(&mut self, fns: Vec<Expr>) {
@@ -311,20 +332,66 @@ impl Evaluator {
             };
         }
     }
+    /*pub fn save_var(&mut self, varname:String, expr:Expr) {
+        self.vars.insert(varname, self.eval(expr, identifier_num))
+    }*/
     pub fn evaluate(&mut self, ast: Option<Expr>, identifier_num: f64) -> f64 {
         match ast.unwrap_or(self.ast.clone()) {
             Expr::Func(fname, _, body) => self.save_func(fname, body),
             Expr::Def(_varname, expr) => self.eval(*expr, identifier_num),
+            //Expr::VarDeclaration(varname, expr) => self.save_var(varname, expr, identifier_num)
             a => self.eval(a, identifier_num),
         }
     }
     fn eval_func(&mut self, fname: String, param: Expr, identifier_num: f64) -> f64 {
-        if let Some(fexpr) = &mut self.funcs.get(&fname) {
-            let fexpr = *fexpr.clone();
-            let param_value = self.eval(param, identifier_num);
-            self.eval(fexpr, param_value)
-        } else {
-            Self::ERROR_NUM
+        let param_value = self.eval(param, identifier_num);
+        match &*fname {
+            "sin" => param_value.sin(),
+            "sinh" => param_value.sinh(),
+            "asin" => param_value.asin(),
+            "asinh" => param_value.asinh(),
+
+            "cos" => param_value.cos(),
+            "cosh" => param_value.cosh(),
+            "acos" => param_value.acos(),
+            "acosh" => param_value.acosh(),
+
+            "tan" => param_value.tan(),
+            "tanh" => param_value.tanh(),
+            "atan" => param_value.atan(),
+            "atanh" => param_value.atanh(),
+
+            "log10" => param_value.log10(),
+            "log2" => param_value.log2(),
+            "ln" => param_value.ln(),
+
+            "floor" => param_value.floor(),
+            "ceil" => param_value.ceil(),
+
+            "sqrt" => param_value.sqrt(),
+            "cbrt" => param_value.cbrt(),
+
+            "2pow" => param_value.exp2(),
+            "exp" => param_value.exp(),
+
+            "abs" => param_value.abs(),
+            "sign" => param_value.signum(),
+
+            //"gamma" => param_value.gamma(),
+            //"fac" => (param_value + 1.0).gamma(),
+            "inverse" => param_value.recip(),
+            "trunc" => param_value.trunc(),
+            "fract" => param_value.fract(),
+
+            "radians" => param_value.to_radians(),
+            "degrees" => param_value.to_degrees(),
+            _ => {
+                if let Some(fexpr) = &mut self.funcs.get(&fname) {
+                    self.eval(*fexpr.clone(), param_value)
+                } else {
+                    Self::ERROR_NUM
+                }
+            }
         }
     }
     fn eval_bin(&mut self, ast: Expr, identifier_num: f64) -> f64 {
