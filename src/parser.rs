@@ -85,7 +85,8 @@ pub struct Parser {
     tokens: Vec<MathToken>,
     idx: usize,
 }
-
+#[derive(Debug)]
+pub struct Error(String);
 #[derive(Debug, Clone)]
 pub enum Expr {
     BinExpr {
@@ -119,55 +120,41 @@ impl Parser {
     fn next(&self) -> Option<MathToken> {
         self.tokens.get(self.idx + 1).cloned()
     }
-    pub fn expect(&mut self, tk: MathToken) -> Result<MathToken, String> {
+    pub fn expect(&mut self, tk: MathToken) -> Result<MathToken, Error> {
         if let Some(token) = self.eat() {
             if token == tk {
                 Ok(token)
             } else {
-                Err(format!("Expected {tk:?} instead got {token:?}"))
+                Err(Error(format!("Expected {tk:?} instead got {token:?}")))
             }
         } else {
-            Err("Not able to eat".to_string())
+            Err(Error("Token is None, expected find some".to_string()))
         }
     }
-    pub fn parse(&mut self) -> Result<Expr, String> {
+    pub fn parse(&mut self) -> Result<Expr, Error> {
         if let Some(MathToken::Eq) = self.next() {
             if let Some(MathToken::Alpha(varname)) = self.peak() {
                 self.eat_n(2);
                 Ok(Expr::Def(varname, Box::new(self.parse_expr())))
             } else {
-                Err("Wtf, expected x = expr".to_string())
+                Err(Error("Expected identifier for var definition".to_string()))
             }
         } else {
             self.parse_func()
         }
     }
-    fn parse_func(&mut self) -> Result<Expr, String> {
-        if let Some(token) = self.eat() {
-            match token {
-                MathToken::Alpha(fname) => {
-                    self.eat(); //eat l paren
-                    if let Some(tk) = self.eat() {
-                        match tk {
-                            MathToken::Alpha(pname) => {
-                                self.eat();
-                                if let Err(e) = self.expect(MathToken::Eq) {
-                                    Err(e)
-                                } else {
-                                    Ok(Expr::Func(fname, pname, Box::new(self.parse_expr())))
-                                }
-                            }
-                            _ => Err("Expected alphanumeric name for parameter".to_string()),
-                        }
-                    } else {
-                        Err("not expected to end parsing".to_string())
-                    }
-                }
-                _ => Err("Expected alphanumeric name for func name".to_string()),
+    fn parse_func(&mut self) -> Result<Expr, Error> {
+        if let Some(MathToken::Alpha(fname)) = self.eat() {
+            self.eat(); //eat l paren
+            if let Some(MathToken::Alpha(pname)) = self.eat() {
+                self.eat(); //eat r paren
+                return self
+                    .expect(MathToken::Eq)
+                    .map(|_| Expr::Func(fname, pname, Box::new(self.parse_expr())));
             }
-        } else {
-            Err("No tokens to parse".to_string())
+            return Err(Error("Expected token to be alphanumeric".to_string()));
         }
+        return Err(Error("No tokens to parse".to_string()));
     }
     fn parse_expr(&mut self) -> Expr {
         self.parse_additive()
@@ -364,6 +351,6 @@ impl Evaluator {
     }
 }
 
-pub fn gen_ast(content: &str) -> Result<Expr, String> {
+pub fn gen_ast(content: &str) -> Result<Expr, Error> {
     Parser::new(tokenize(content)).parse()
 }
