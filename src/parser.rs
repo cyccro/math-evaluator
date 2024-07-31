@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathOp {
     ADD,
@@ -15,6 +13,7 @@ pub enum MathToken {
     LeftParen,
     RightParen,
     Eq,
+    SemiColon,
     VarDecl,
     Alpha(String),
     Num(String),
@@ -44,6 +43,7 @@ pub fn tokenize(content: &str) -> Vec<MathToken> {
             b'/' => MathToken::Operator(MathOp::DIV),
             b'^' => MathToken::Operator(MathOp::POW),
             b'%' => MathToken::Operator(MathOp::REM),
+            b';' => MathToken::SemiColon,
             _ => {
                 if byte.is_ascii_digit() {
                     let mut digit = String::with_capacity(12);
@@ -55,7 +55,7 @@ pub fn tokenize(content: &str) -> Vec<MathToken> {
                             i += 1;
                         } else {
                             break;
-                        };
+                        }
                     }
                     i -= 1;
                     MathToken::Num(digit)
@@ -102,8 +102,9 @@ pub enum Expr {
     Func(String, String, Box<Expr>), //Func name, Func param, func expr,
     FunCall(String, Box<Expr>),      //Func name, parameter
     Def(String, Box<Expr>),
-    //VarDeclaration(String, Box<Expr>),
+    VarDeclaration(String, Box<Expr>),
     Identifier(String),
+    UnaryNeg,
     Numeric(f64),
 }
 impl Parser {
@@ -137,6 +138,14 @@ impl Parser {
         }
     }
     pub fn parse(&mut self) -> Result<Expr, Error> {
+        if let Some(MathToken::VarDecl) = self.peak() {
+            self.eat();
+            if let Some(MathToken::Alpha(tk)) = self.eat() {
+                self.expect(MathToken::Eq)?;
+                return Ok(Expr::VarDeclaration(tk, Box::new(self.parse_expr()?)));
+            }
+            return Err(Error("Expected a alphanumeric name".to_string()));
+        }
         if let Some(MathToken::Eq) = self.next() {
             if let Some(MathToken::Alpha(varname)) = self.peak() {
                 self.eat_n(2);
@@ -151,11 +160,10 @@ impl Parser {
         if let Some(MathToken::Alpha(fname)) = self.eat() {
             self.eat(); //eat l paren
             if let Some(MathToken::Alpha(pname)) = self.eat() {
-                self.eat(); //eat r paren
-                if let Ok(_) = self.expect(MathToken::Eq) {
-                    let expr = self.parse_expr()?;
-                    return Ok(Expr::Func(fname, pname, Box::new(expr)));
-                }
+                self.eat();
+                self.expect(MathToken::Eq)?; //eat r paren
+                let expr = self.parse_expr()?;
+                return Ok(Expr::Func(fname, pname, Box::new(expr)));
             }
             return Err(Error("Expected token to be alphanumeric".to_string()));
         }
@@ -223,15 +231,6 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expr, Error> {
         if let Some(token) = self.peak() {
             return match token {
-                /*          MathToken::VarDecl => {
-                    self.eat();
-                    if let Some(MathToken::Alpha(varname)) = self.eat() {
-                        self.expect(MathToken::Eq)?;
-                        Ok(Expr::VarDeclaration(varname, Box::new(self.parse_expr()?)))
-                    }else {
-                        Err(Error(format!("Expected a identifier for variable name")))
-                    }
-                }*/
                 MathToken::LeftParen => {
                     //left paren for expr (5 * x - 4y)
                     self.eat();
@@ -288,141 +287,11 @@ impl Parser {
                         return Err(Error(format!("Invalid number {num}")));
                     }
                 }
+                MathToken::Operator(MathOp::SUB) => Ok(Expr::UnaryNeg),
                 _ => Err(Error(format!("Unexpected token {token:?} during parse"))),
             };
         }
         return Err(Error("Not able to parse due to lack of tokens".to_string()));
-    }
-}
-
-pub struct Evaluator {
-    ast: Expr,
-    funcs: HashMap<String, Box<Expr>>,
-    vars: HashMap<String, Box<Expr>>,
-}
-
-impl Evaluator {
-    const ERROR_NUM: f64 = -1.234567890;
-    pub fn new(ast: Expr) -> Self {
-        Self {
-            ast,
-            funcs: HashMap::new(),
-            vars: HashMap::new(),
-        }
-    }
-    fn save_func(&mut self, fname: String, body: Box<Expr>) -> f64 {
-        self.funcs.insert(fname, body);
-        0.0
-    }
-    pub fn save_fn(&mut self, f: Expr) {
-        match f {
-            Expr::Func(fname, _, expr) => {
-                self.save_func(fname, expr);
-            }
-            _ => {}
-        }
-    }
-    pub fn save_fns(&mut self, fns: Vec<Expr>) {
-        for f in fns {
-            match f {
-                Expr::Func(fname, _, expr) => {
-                    self.save_func(fname, expr);
-                }
-                _ => {}
-            };
-        }
-    }
-    /*pub fn save_var(&mut self, varname:String, expr:Expr) {
-        self.vars.insert(varname, self.eval(expr, identifier_num))
-    }*/
-    pub fn evaluate(&mut self, ast: Option<Expr>, identifier_num: f64) -> f64 {
-        match ast.unwrap_or(self.ast.clone()) {
-            Expr::Func(fname, _, body) => self.save_func(fname, body),
-            Expr::Def(_varname, expr) => self.eval(*expr, identifier_num),
-            //Expr::VarDeclaration(varname, expr) => self.save_var(varname, expr, identifier_num)
-            a => self.eval(a, identifier_num),
-        }
-    }
-    fn eval_func(&mut self, fname: String, param: Expr, identifier_num: f64) -> f64 {
-        let param_value = self.eval(param, identifier_num);
-        match &*fname {
-            "sin" => param_value.sin(),
-            "sinh" => param_value.sinh(),
-            "asin" => param_value.asin(),
-            "asinh" => param_value.asinh(),
-
-            "cos" => param_value.cos(),
-            "cosh" => param_value.cosh(),
-            "acos" => param_value.acos(),
-            "acosh" => param_value.acosh(),
-
-            "tan" => param_value.tan(),
-            "tanh" => param_value.tanh(),
-            "atan" => param_value.atan(),
-            "atanh" => param_value.atanh(),
-
-            "log10" => param_value.log10(),
-            "log2" => param_value.log2(),
-            "ln" => param_value.ln(),
-
-            "floor" => param_value.floor(),
-            "ceil" => param_value.ceil(),
-
-            "sqrt" => param_value.sqrt(),
-            "cbrt" => param_value.cbrt(),
-
-            "2pow" => param_value.exp2(),
-            "exp" => param_value.exp(),
-
-            "abs" => param_value.abs(),
-            "sign" => param_value.signum(),
-
-            //"gamma" => param_value.gamma(),
-            //"fac" => (param_value + 1.0).gamma(),
-            "inverse" => param_value.recip(),
-            "trunc" => param_value.trunc(),
-            "fract" => param_value.fract(),
-
-            "radians" => param_value.to_radians(),
-            "degrees" => param_value.to_degrees(),
-            _ => {
-                if let Some(fexpr) = &mut self.funcs.get(&fname) {
-                    self.eval(*fexpr.clone(), param_value)
-                } else {
-                    Self::ERROR_NUM
-                }
-            }
-        }
-    }
-    fn eval_bin(&mut self, ast: Expr, identifier_num: f64) -> f64 {
-        if let Expr::BinExpr { lhs, rhs, operator } = ast {
-            let lhs_val = self.evaluate(Some(*lhs), identifier_num);
-            let rhs_val = self.evaluate(Some(*rhs), identifier_num);
-            match operator {
-                MathOp::ADD => lhs_val + rhs_val,
-                MathOp::SUB => lhs_val - rhs_val,
-                MathOp::MUL => lhs_val * rhs_val,
-                MathOp::DIV => lhs_val / rhs_val,
-                MathOp::POW => lhs_val.powf(rhs_val),
-                MathOp::REM => lhs_val % rhs_val,
-            }
-        } else {
-            panic!("Wtf it should wait for binary expression")
-        }
-    }
-    fn eval(&mut self, ast: Expr, identifier_num: f64) -> f64 {
-        match ast {
-            Expr::Func(_, _, _) => panic!("Didnt expect to receive functions and var definitions"),
-            Expr::FunCall(fname, pexpr) => self.eval_func(fname, *pexpr, identifier_num),
-            Expr::Def(_, expr) => self.eval(*expr, identifier_num),
-            Expr::Identifier(_) => identifier_num,
-            Expr::Numeric(n) => n,
-            Expr::BinExpr {
-                lhs: _,
-                rhs: _,
-                operator: _,
-            } => self.eval_bin(ast, identifier_num),
-        }
     }
 }
 
